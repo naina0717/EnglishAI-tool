@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Header } from './components/Header';
 import { Dashboard } from './components/Dashboard';
 import { LevelSelector } from './components/LevelSelector';
@@ -161,12 +162,14 @@ function App() {
             transition={{ duration: 0.3 }}
           >
             <Header user={user} />
-            <LessonPage
-              lesson={appState.selectedLesson}
-              skill={appState.selectedSkill}
-              onComplete={handleLessonComplete}
-              onBack={handleBack}
-            />
+            <ErrorBoundary>
+              <LessonPage
+                lesson={appState.selectedLesson}
+                skill={appState.selectedSkill}
+                onComplete={handleLessonComplete}
+                onBack={handleBack}
+              />
+            </ErrorBoundary>
           </motion.div>
         )}
       </AnimatePresence>

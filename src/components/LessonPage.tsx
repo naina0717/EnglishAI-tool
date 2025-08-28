@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Play, Pause, Mic, MicOff, Send, Volume2 } from 'lucide-react';
+import { ErrorBoundary } from './ErrorBoundary';
 import { GeneratedLesson, Assignment } from '../utils/aiContentGenerator';
 import { checkOpenAnswer, checkSpeakingAnswer, checkWritingAnswer, AIFeedback } from '../utils/aiChecker';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
@@ -28,24 +29,71 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [totalScore, setTotalScore] = useState(0);
   const [isCompleted, setIsCompleted] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [currentFeedback, setCurrentFeedback] = useState<AIFeedback | null>(null);
+  const [audioChunks, setAudioChunks] = useState<string[]>([]);
+  const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   const { isListening, transcript, startListening, stopListening, resetTranscript } = useSpeechRecognition();
 
   const currentAssignmentData = lesson.assignments[currentAssignment];
 
-  // Text-to-Speech for listening exercises
-  const playAudio = (text: string) => {
-    if ('speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.8;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-      
-      utterance.onstart = () => setIsPlaying(true);
-      utterance.onend = () => setIsPlaying(false);
-      
-      speechSynthesis.speak(utterance);
+  // Assignment type registry
+  const supportedTypes = ['mcq', 'true-false', 'fill-blank', 'open', 'speaking', 'writing'];
+
+  useEffect(() => {
+    // Split audio text into chunks for better TTS handling
+    if (lesson.content?.audioText) {
+      const sentences = lesson.content.audioText.match(/[^\.!?]+[\.!?]+/g) || [lesson.content.audioText];
+      setAudioChunks(sentences.map(s => s.trim()));
     }
+
+    // Cleanup on unmount
+    return () => {
+      if (abortController) {
+        abortController.abort();
+      }
+      stopAudio();
+    };
+  }, [lesson.content?.audioText]);
+
+  // Text-to-Speech for listening exercises
+  const playAudio = () => {
+    if ('speechSynthesis' in window) {
+      setIsPlaying(true);
+      setCurrentChunkIndex(0);
+      playChunk(0);
+    }
+  };
+
+  const playChunk = (chunkIndex: number) => {
+    if (chunkIndex >= audioChunks.length) {
+      setIsPlaying(false);
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(audioChunks[chunkIndex]);
+    utterance.rate = 0.8;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    
+    utterance.onend = () => {
+      const nextIndex = chunkIndex + 1;
+      setCurrentChunkIndex(nextIndex);
+      if (nextIndex < audioChunks.length && isPlaying) {
+        setTimeout(() => playChunk(nextIndex), 200); // Small pause between chunks
+      } else {
+        setIsPlaying(false);
+      }
+    };
+    
+    speechSynthesis.speak(utterance);
+  };
+
+  const restartAudio = () => {
+    stopAudio();
+    setTimeout(() => playAudio(), 100);
   };
 
   const stopAudio = () => {
@@ -56,14 +104,21 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
   };
 
   const handleAnswer = async (answer: string | number | boolean) => {
-    if (!currentAssignmentData) return;
+    if (!currentAssignmentData || isSubmitting) return;
 
-    setIsSubmitting(true);
-    let feedback: AIFeedback | undefined;
+    try {
+      setIsSubmitting(true);
+      setShowFeedback(false);
+      setCurrentFeedback(null);
+      
+      // Create abort controller for this request
+      const controller = new AbortController();
+      setAbortController(controller);
+      
+      let feedback: AIFeedback | undefined;
 
-    // Get AI feedback for open-ended questions
-    if (currentAssignmentData.type === 'open' || currentAssignmentData.type === 'speaking' || currentAssignmentData.type === 'writing') {
-      try {
+      // Get AI feedback for open-ended questions
+      if (currentAssignmentData.type === 'open' || currentAssignmentData.type === 'speaking' || currentAssignmentData.type === 'writing') {
         if (currentAssignmentData.type === 'speaking') {
           feedback = await checkSpeakingAnswer(currentAssignmentData.question, answer as string);
         } else if (currentAssignmentData.type === 'writing') {
@@ -71,53 +126,107 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
         } else {
           feedback = await checkOpenAnswer(currentAssignmentData.question, answer as string, currentAssignmentData.context);
         }
-      } catch (error) {
-        console.error('Error getting AI feedback:', error);
-        feedback = {
-          correct: true,
-          score: 75,
-          feedback: 'Good effort! Keep practicing to improve your skills.'
-        };
       }
+
+      const newAnswer: Answer = {
+        assignmentId: currentAssignmentData.id,
+        answer,
+        feedback
+      };
+
+      const updatedAnswers = [...answers.filter(a => a.assignmentId !== currentAssignmentData.id), newAnswer];
+      setAnswers(updatedAnswers);
+
+      // Calculate score
+      let points = 0;
+      if (feedback) {
+        points = Math.round((feedback.score / 100) * currentAssignmentData.points);
+      } else {
+        // For MCQ, true/false, fill-blank
+        const isCorrect = answer === currentAssignmentData.correctAnswer;
+        points = isCorrect ? currentAssignmentData.points : 0;
+      }
+
+      setTotalScore(prev => prev + points);
+      setCurrentFeedback(feedback || {
+        correct: answer === currentAssignmentData.correctAnswer,
+        score: points,
+        feedback: answer === currentAssignmentData.correctAnswer ? 'Correct!' : 'Not quite right. Try again!'
+      });
+      setShowFeedback(true);
+      
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        return; // Request was cancelled
+      }
+      
+      console.error('Error handling answer:', error);
+      setCurrentFeedback({
+        correct: false,
+        score: 0,
+        feedback: 'Sorry, there was an error processing your answer. Please try again.'
+      });
+      setShowFeedback(true);
+    } finally {
+      setIsSubmitting(false);
+      setAbortController(null);
     }
+  };
 
-    const newAnswer: Answer = {
-      assignmentId: currentAssignmentData.id,
-      answer,
-      feedback
-    };
-
-    const updatedAnswers = [...answers.filter(a => a.assignmentId !== currentAssignmentData.id), newAnswer];
-    setAnswers(updatedAnswers);
-
-    // Calculate score
-    let points = 0;
-    if (feedback) {
-      points = Math.round((feedback.score / 100) * currentAssignmentData.points);
-    } else {
-      // For MCQ, true/false, fill-blank
-      const isCorrect = answer === currentAssignmentData.correctAnswer;
-      points = isCorrect ? currentAssignmentData.points : 0;
-    }
-
-    setTotalScore(prev => prev + points);
-    setIsSubmitting(false);
-
-    // Move to next assignment or complete
-    setTimeout(() => {
+  const handleNext = () => {
+    try {
       if (currentAssignment < lesson.assignments.length - 1) {
         setCurrentAssignment(prev => prev + 1);
         setWritingText('');
         resetTranscript();
+        setShowFeedback(false);
+        setCurrentFeedback(null);
       } else {
         setIsCompleted(true);
-        onComplete(lesson.id, totalScore + points);
+        onComplete(lesson.id, totalScore);
       }
-    }, 2000);
+    } catch (error) {
+      console.error('Error advancing to next question:', error);
+    }
+  };
+
+  const handleRetry = () => {
+    setShowFeedback(false);
+    setCurrentFeedback(null);
+    setWritingText('');
+    resetTranscript();
   };
 
   const renderAssignment = () => {
-    if (!currentAssignmentData) return null;
+    if (!currentAssignmentData) {
+      return (
+        <div className="text-center p-8">
+          <p className="text-gray-600 mb-4">No assignment data available</p>
+          <button onClick={handleNext} className="bg-blue-600 text-white px-4 py-2 rounded-lg">
+            Continue
+          </button>
+        </div>
+      );
+    }
+
+    // Check if assignment type is supported
+    if (!supportedTypes.includes(currentAssignmentData.type)) {
+      return (
+        <div className="text-center p-8 bg-yellow-50 rounded-lg">
+          <div className="text-4xl mb-4">🚧</div>
+          <h3 className="text-lg font-semibold text-yellow-800 mb-2">Assignment Type Not Supported Yet</h3>
+          <p className="text-yellow-700 mb-4">
+            The assignment type "{currentAssignmentData.type}" is not implemented yet.
+          </p>
+          <button 
+            onClick={handleNext}
+            className="bg-yellow-600 text-white px-6 py-2 rounded-lg hover:bg-yellow-700"
+          >
+            Skip and Continue
+          </button>
+        </div>
+      );
+    }
 
     const existingAnswer = answers.find(a => a.assignmentId === currentAssignmentData.id);
 
@@ -232,7 +341,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
               <div className="flex items-center justify-center space-x-4 mb-4">
                 <button
                   onClick={isListening ? stopListening : startListening}
-                  disabled={existingAnswer || isSubmitting}
+                  disabled={existingAnswer || isSubmitting || showFeedback}
                   className={`p-4 rounded-full transition-colors ${
                     isListening
                       ? 'bg-red-500 text-white animate-pulse'
@@ -251,25 +360,19 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                   <div className="bg-white p-3 rounded border">
                     <p className="text-sm font-medium">You said:</p>
                     <p className="text-gray-800">{transcript}</p>
-                    <button
-                      onClick={() => handleAnswer(transcript)}
-                      disabled={isSubmitting}
-                      className="mt-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
-                    >
-                      Submit Answer
-                    </button>
+                    {!showFeedback && (
+                      <button
+                        onClick={() => handleAnswer(transcript)}
+                        disabled={isSubmitting}
+                        className="mt-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                      >
+                        {isSubmitting ? 'Submitting...' : 'Submit Answer'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
             </div>
-
-            {existingAnswer?.feedback && (
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <h4 className="font-semibold text-blue-800 mb-2">Feedback:</h4>
-                <p className="text-blue-700">{existingAnswer.feedback.feedback}</p>
-                <p className="text-sm text-blue-600 mt-2">Score: {existingAnswer.feedback.score}/100</p>
-              </div>
-            )}
           </div>
         );
 
@@ -293,7 +396,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
               onChange={(e) => setWritingText(e.target.value)}
               placeholder="Write your answer here..."
               className="w-full h-40 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-              disabled={existingAnswer || isSubmitting}
+              disabled={existingAnswer || isSubmitting || showFeedback}
             />
             
             <div className="flex justify-between items-center">
@@ -301,22 +404,16 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                 Words: {writingText.trim().split(/\s+/).filter(word => word.length > 0).length}
                 {currentAssignmentData.minWords && ` (min: ${currentAssignmentData.minWords})`}
               </span>
-              <button
-                onClick={() => handleAnswer(writingText)}
-                disabled={!writingText.trim() || existingAnswer || isSubmitting}
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-              >
-                {isSubmitting ? 'Submitting...' : 'Submit'}
-              </button>
+              {!showFeedback && (
+                <button
+                  onClick={() => handleAnswer(writingText)}
+                  disabled={!writingText.trim() || existingAnswer || isSubmitting}
+                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Submitting...' : 'Submit'}
+                </button>
+              )}
             </div>
-
-            {existingAnswer?.feedback && (
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <h4 className="font-semibold text-blue-800 mb-2">Feedback:</h4>
-                <p className="text-blue-700">{existingAnswer.feedback.feedback}</p>
-                <p className="text-sm text-blue-600 mt-2">Score: {existingAnswer.feedback.score}/100</p>
-              </div>
-            )}
           </div>
         );
 
@@ -327,33 +424,27 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
             <textarea
               placeholder="Type your detailed answer here..."
               className="w-full h-32 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+              disabled={existingAnswer || isSubmitting || showFeedback}
               onKeyPress={(e) => {
                 if (e.key === 'Enter' && e.ctrlKey && e.currentTarget.value.trim()) {
                   handleAnswer(e.currentTarget.value.trim());
                 }
               }}
-              disabled={existingAnswer || isSubmitting}
             />
-            <div className="flex justify-end">
-              <button
-                onClick={(e) => {
-                  const textarea = e.currentTarget.previousElementSibling as HTMLTextAreaElement;
-                  if (textarea.value.trim()) {
-                    handleAnswer(textarea.value.trim());
-                  }
-                }}
-                disabled={existingAnswer || isSubmitting}
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-              >
-                {isSubmitting ? 'Submitting...' : 'Submit'}
-              </button>
-            </div>
-
-            {existingAnswer?.feedback && (
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <h4 className="font-semibold text-blue-800 mb-2">Feedback:</h4>
-                <p className="text-blue-700">{existingAnswer.feedback.feedback}</p>
-                <p className="text-sm text-blue-600 mt-2">Score: {existingAnswer.feedback.score}/100</p>
+            {!showFeedback && (
+              <div className="flex justify-end">
+                <button
+                  onClick={(e) => {
+                    const textarea = e.currentTarget.previousElementSibling as HTMLTextAreaElement;
+                    if (textarea.value.trim()) {
+                      handleAnswer(textarea.value.trim());
+                    }
+                  }}
+                  disabled={existingAnswer || isSubmitting}
+                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Submitting...' : 'Submit'}
+                </button>
               </div>
             )}
           </div>
@@ -443,15 +534,26 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                   <div className="flex items-center justify-between mb-4">
                     <h4 className="font-semibold text-gray-800">Audio Content</h4>
                     <button
-                      onClick={() => isPlaying ? stopAudio() : playAudio(lesson.content.audioText)}
+                      onClick={() => isPlaying ? stopAudio() : playAudio()}
                       className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
                     >
                       {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                       <span>{isPlaying ? 'Stop' : 'Play'}</span>
                       <Volume2 className="w-4 h-4" />
                     </button>
+                    <button
+                      onClick={restartAudio}
+                      className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700"
+                    >
+                      Restart
+                    </button>
                   </div>
                   <p className="text-gray-700 leading-relaxed">{lesson.content.audioText}</p>
+                  {isPlaying && (
+                    <div className="mt-2 text-sm text-blue-600">
+                      Playing chunk {currentChunkIndex + 1} of {audioChunks.length}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -522,7 +624,50 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                 />
               </div>
 
-              {renderAssignment()}
+              <ErrorBoundary>
+                {renderAssignment()}
+              </ErrorBoundary>
+
+              {/* Feedback Panel */}
+              {showFeedback && currentFeedback && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={`p-4 rounded-lg ${
+                    currentFeedback.correct ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
+                  }`}
+                >
+                  <h4 className={`font-semibold mb-2 ${
+                    currentFeedback.correct ? 'text-green-800' : 'text-red-800'
+                  }`}>
+                    {currentFeedback.correct ? '✅ Correct!' : '❌ Not Quite Right'}
+                  </h4>
+                  <p className={`mb-3 ${
+                    currentFeedback.correct ? 'text-green-700' : 'text-red-700'
+                  }`}>
+                    {currentFeedback.feedback}
+                  </p>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Score: {currentFeedback.score}/100
+                  </p>
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={handleNext}
+                      className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
+                    >
+                      {currentAssignment < lesson.assignments.length - 1 ? 'Next Question' : 'Complete Lesson'}
+                    </button>
+                    {!currentFeedback.correct && (
+                      <button
+                        onClick={handleRetry}
+                        className="bg-gray-600 text-white px-6 py-2 rounded-lg hover:bg-gray-700"
+                      >
+                        Try Again
+                      </button>
+                    )}
+                  </div>
+                </motion.div>
+              )}
             </motion.div>
           )}
         </div>

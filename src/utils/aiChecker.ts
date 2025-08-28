@@ -9,6 +9,11 @@ export interface AIFeedback {
 
 export async function checkOpenAnswer(question: string, userAnswer: string, context?: string): Promise<AIFeedback> {
   try {
+    // Add timeout to prevent hanging requests
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Request timeout')), 30000);
+    });
+
     const prompt = `
 You are an English teacher evaluating a student's answer. Please provide structured feedback.
 
@@ -26,7 +31,7 @@ Please evaluate the answer and respond in this exact JSON format:
 Consider grammar, vocabulary, content relevance, and completeness in your evaluation.
 `;
 
-    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+    const fetchPromise = fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -34,7 +39,18 @@ Consider grammar, vocabulary, content relevance, and completeness in your evalua
       })
     });
     
+    const response = await Promise.race([fetchPromise, timeoutPromise]);
+    
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status}`);
+    }
+    
     const data = await response.json();
+    
+    if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
+      throw new Error('Invalid API response format');
+    }
+    
     const responseText = data.candidates[0].content.parts[0].text;
     
     // Try to parse JSON response
@@ -56,10 +72,20 @@ Consider grammar, vocabulary, content relevance, and completeness in your evalua
     
   } catch (error) {
     console.error('Error checking answer with AI:', error);
+    
+    // Provide different fallback based on error type
+    if (error instanceof Error && error.message === 'Request timeout') {
+      return {
+        correct: false,
+        score: 0,
+        feedback: 'The request timed out. Please check your internet connection and try again.'
+      };
+    }
+    
     return {
       correct: false,
       score: 0,
-      feedback: 'Unable to evaluate your answer at the moment. Please try again later.'
+      feedback: 'Unable to evaluate your answer at the moment. Please check your connection and try again.'
     };
   }
 }
