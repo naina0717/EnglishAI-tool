@@ -19,8 +19,17 @@ export function LevelSelector({ title, icon, progress, onLevelSelect, onBack }: 
   };
 
   const isCompleted = (level: typeof levels[number]) => {
-    const requiredXP = { beginner: 50, intermediate: 150, advanced: 300 };
-    return progress.xp >= requiredXP[level];
+    // Check if level is completed based on lessons completed
+    const levelLessons = 5; // 5 lessons per level
+    const completedInLevel = progress.completed.filter(id => id.includes(`-${level}-`)).length;
+    return completedInLevel >= levelLessons;
+  };
+
+  const canAccessLevel = (level: typeof levels[number]) => {
+    if (level === 'beginner') return true;
+    if (level === 'intermediate') return isCompleted('beginner');
+    if (level === 'advanced') return isCompleted('intermediate');
+    return false;
   };
 
   return (
@@ -42,7 +51,7 @@ export function LevelSelector({ title, icon, progress, onLevelSelect, onBack }: 
         
         <div className="grid md:grid-cols-3 gap-6">
           {levels.map((level, index) => {
-            const unlocked = isUnlocked(level);
+            const unlocked = canAccessLevel(level);
             const completed = isCompleted(level);
             const isCurrent = progress.level === level;
             
@@ -74,9 +83,9 @@ export function LevelSelector({ title, icon, progress, onLevelSelect, onBack }: 
                 
                 <div className="space-y-3">
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Required XP:</span>
+                    <span className="text-gray-600">Lessons to complete:</span>
                     <span className="font-medium">
-                      {level === 'beginner' ? '0' : level === 'intermediate' ? '50' : '150'}
+                      5
                     </span>
                   </div>
                   
@@ -98,7 +107,7 @@ export function LevelSelector({ title, icon, progress, onLevelSelect, onBack }: 
                   
                   {!unlocked && (
                     <div className="bg-gray-100 text-gray-500 text-sm px-3 py-2 rounded-lg">
-                      Locked
+                      Complete previous level to unlock
                     </div>
                   )}
                   

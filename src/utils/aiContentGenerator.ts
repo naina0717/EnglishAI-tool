@@ -17,6 +17,9 @@ export interface Assignment {
   correctAnswer?: string | number | boolean;
   points: number;
   context?: string;
+  instructions?: string[];
+  minWords?: number;
+  maxWords?: number;
 }
 
 async function callGeminiAPI(prompt: string): Promise<string> {
