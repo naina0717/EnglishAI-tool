@@ -33,30 +33,23 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
   const [currentFeedback, setCurrentFeedback] = useState<AIFeedback | null>(null);
   const [audioChunks, setAudioChunks] = useState<string[]>([]);
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
-  const [abortController, setAbortController] = useState<AbortController | null>(null);
+  const [isAudioReady, setIsAudioReady] = useState(false);
 
   const { isListening, transcript, startListening, stopListening, resetTranscript } = useSpeechRecognition();
 
   const currentAssignmentData = lesson.assignments[currentAssignment];
 
   // Assignment type registry
-  const supportedTypes = ['mcq', 'true-false', 'fill-blank', 'open', 'speaking', 'writing'];
+  const supportedTypes = ['mcq', 'true-false', 'fill-blank', 'open', 'speaking', 'writing', 'matching', 'vocabulary', 'grammar'];
 
   useEffect(() => {
     // Split audio text into chunks for better TTS handling
-    if (lesson.content?.audioText) {
+    if (skill === 'listening' && lesson.content?.audioText) {
       const sentences = lesson.content.audioText.match(/[^\.!?]+[\.!?]+/g) || [lesson.content.audioText];
       setAudioChunks(sentences.map(s => s.trim()));
+      setIsAudioReady(true);
     }
-
-    // Cleanup on unmount
-    return () => {
-      if (abortController) {
-        abortController.abort();
-      }
-      stopAudio();
-    };
-  }, [lesson.content?.audioText]);
+  }, [lesson.content?.audioText, skill]);
 
   // Text-to-Speech for listening exercises
   const playAudio = () => {
@@ -106,15 +99,11 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
   const handleAnswer = async (answer: string | number | boolean) => {
     if (!currentAssignmentData || isSubmitting) return;
 
+    setIsSubmitting(true);
+    setShowFeedback(false);
+    setCurrentFeedback(null);
+
     try {
-      setIsSubmitting(true);
-      setShowFeedback(false);
-      setCurrentFeedback(null);
-      
-      // Create abort controller for this request
-      const controller = new AbortController();
-      setAbortController(controller);
-      
       let feedback: AIFeedback | undefined;
 
       // Get AI feedback for open-ended questions
@@ -126,6 +115,14 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
         } else {
           feedback = await checkOpenAnswer(currentAssignmentData.question, answer as string, currentAssignmentData.context);
         }
+      } else {
+        // For MCQ, true/false, fill-blank - check immediately
+        const isCorrect = answer === currentAssignmentData.correctAnswer;
+        feedback = {
+          correct: isCorrect,
+          score: isCorrect ? 100 : 0,
+          feedback: isCorrect ? 'Correct! Well done.' : `Not quite right. The correct answer is: ${currentAssignmentData.correctAnswer}`
+        };
       }
 
       const newAnswer: Answer = {
@@ -141,25 +138,13 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
       let points = 0;
       if (feedback) {
         points = Math.round((feedback.score / 100) * currentAssignmentData.points);
-      } else {
-        // For MCQ, true/false, fill-blank
-        const isCorrect = answer === currentAssignmentData.correctAnswer;
-        points = isCorrect ? currentAssignmentData.points : 0;
       }
 
       setTotalScore(prev => prev + points);
-      setCurrentFeedback(feedback || {
-        correct: answer === currentAssignmentData.correctAnswer,
-        score: points,
-        feedback: answer === currentAssignmentData.correctAnswer ? 'Correct!' : 'Not quite right. Try again!'
-      });
+      setCurrentFeedback(feedback);
       setShowFeedback(true);
       
     } catch (error: any) {
-      if (error.name === 'AbortError') {
-        return; // Request was cancelled
-      }
-      
       console.error('Error handling answer:', error);
       setCurrentFeedback({
         correct: false,
@@ -169,7 +154,6 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
       setShowFeedback(true);
     } finally {
       setIsSubmitting(false);
-      setAbortController(null);
     }
   };
 
@@ -177,7 +161,6 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
     try {
       if (currentAssignment < lesson.assignments.length - 1) {
         setCurrentAssignment(prev => prev + 1);
-        setWritingText('');
         resetTranscript();
         setShowFeedback(false);
         setCurrentFeedback(null);
@@ -191,10 +174,12 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
   };
 
   const handleRetry = () => {
+    // Reset all form states
     setShowFeedback(false);
     setCurrentFeedback(null);
     setWritingText('');
     resetTranscript();
+    setIsSubmitting(false);
   };
 
   const renderAssignment = () => {
@@ -204,25 +189,6 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
           <p className="text-gray-600 mb-4">No assignment data available</p>
           <button onClick={handleNext} className="bg-blue-600 text-white px-4 py-2 rounded-lg">
             Continue
-          </button>
-        </div>
-      );
-    }
-
-    // Check if assignment type is supported
-    if (!supportedTypes.includes(currentAssignmentData.type)) {
-      return (
-        <div className="text-center p-8 bg-yellow-50 rounded-lg">
-          <div className="text-4xl mb-4">🚧</div>
-          <h3 className="text-lg font-semibold text-yellow-800 mb-2">Assignment Type Not Supported Yet</h3>
-          <p className="text-yellow-700 mb-4">
-            The assignment type "{currentAssignmentData.type}" is not implemented yet.
-          </p>
-          <button 
-            onClick={handleNext}
-            className="bg-yellow-600 text-white px-6 py-2 rounded-lg hover:bg-yellow-700"
-          >
-            Skip and Continue
           </button>
         </div>
       );
@@ -240,7 +206,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                 <button
                   key={index}
                   onClick={() => handleAnswer(index)}
-                  disabled={existingAnswer || isSubmitting}
+                  disabled={existingAnswer || isSubmitting || showFeedback}
                   className={`w-full p-3 text-left rounded-lg border transition-colors ${
                     existingAnswer
                       ? index === currentAssignmentData.correctAnswer
@@ -267,7 +233,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                 <button
                   key={value.toString()}
                   onClick={() => handleAnswer(value)}
-                  disabled={existingAnswer || isSubmitting}
+                  disabled={existingAnswer || isSubmitting || showFeedback}
                   className={`flex-1 p-3 rounded-lg border transition-colors ${
                     existingAnswer
                       ? value === currentAssignmentData.correctAnswer
@@ -293,13 +259,13 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
               <input
                 type="text"
                 placeholder="Type your answer..."
-                className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
                 onKeyPress={(e) => {
                   if (e.key === 'Enter' && e.currentTarget.value.trim()) {
                     handleAnswer(e.currentTarget.value.trim());
                   }
                 }}
-                disabled={existingAnswer || isSubmitting}
+                disabled={existingAnswer || isSubmitting || showFeedback}
               />
               <button
                 onClick={(e) => {
@@ -308,7 +274,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                     handleAnswer(input.value.trim());
                   }
                 }}
-                disabled={existingAnswer || isSubmitting}
+                disabled={existingAnswer || isSubmitting || showFeedback}
                 className="px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
                 <Send className="w-4 h-4" />
@@ -341,7 +307,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
               <div className="flex items-center justify-center space-x-4 mb-4">
                 <button
                   onClick={isListening ? stopListening : startListening}
-                  disabled={existingAnswer || isSubmitting || showFeedback}
+                  disabled={existingAnswer || isSubmitting}
                   className={`p-4 rounded-full transition-colors ${
                     isListening
                       ? 'bg-red-500 text-white animate-pulse'
@@ -360,7 +326,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                   <div className="bg-white p-3 rounded border">
                     <p className="text-sm font-medium">You said:</p>
                     <p className="text-gray-800">{transcript}</p>
-                    {!showFeedback && (
+                    {!showFeedback && !existingAnswer && (
                       <button
                         onClick={() => handleAnswer(transcript)}
                         disabled={isSubmitting}
@@ -395,8 +361,8 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
               value={writingText}
               onChange={(e) => setWritingText(e.target.value)}
               placeholder="Write your answer here..."
-              className="w-full h-40 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-              disabled={existingAnswer || isSubmitting || showFeedback}
+              className="w-full h-40 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none disabled:bg-gray-100"
+              disabled={isSubmitting || showFeedback}
             />
             
             <div className="flex justify-between items-center">
@@ -407,7 +373,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
               {!showFeedback && (
                 <button
                   onClick={() => handleAnswer(writingText)}
-                  disabled={!writingText.trim() || existingAnswer || isSubmitting}
+                  disabled={!writingText.trim() || isSubmitting}
                   className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
                   {isSubmitting ? 'Submitting...' : 'Submit'}
@@ -423,8 +389,8 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
             <h3 className="text-lg font-semibold mb-4">{currentAssignmentData.question}</h3>
             <textarea
               placeholder="Type your detailed answer here..."
-              className="w-full h-32 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-              disabled={existingAnswer || isSubmitting || showFeedback}
+              className="w-full h-32 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none disabled:bg-gray-100"
+              disabled={isSubmitting || showFeedback}
               onKeyPress={(e) => {
                 if (e.key === 'Enter' && e.ctrlKey && e.currentTarget.value.trim()) {
                   handleAnswer(e.currentTarget.value.trim());
@@ -440,7 +406,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                       handleAnswer(textarea.value.trim());
                     }
                   }}
-                  disabled={existingAnswer || isSubmitting}
+                  disabled={isSubmitting}
                   className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
                   {isSubmitting ? 'Submitting...' : 'Submit'}
@@ -450,8 +416,59 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
           </div>
         );
 
+      case 'matching':
+      case 'vocabulary':
+        // Handle vocabulary-specific assignments
+        if (currentAssignmentData.type === 'vocabulary' || currentAssignmentData.type === 'matching') {
+          return (
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold mb-4">{currentAssignmentData.question}</h3>
+              <div className="space-y-2">
+                {currentAssignmentData.options?.map((option, index) => (
+                  <button
+                    key={index}
+                    onClick={() => handleAnswer(index)}
+                    disabled={existingAnswer || isSubmitting || showFeedback}
+                    className={`w-full p-3 text-left rounded-lg border transition-colors ${
+                      existingAnswer
+                        ? index === currentAssignmentData.correctAnswer
+                          ? 'bg-green-100 border-green-500 text-green-800'
+                          : index === existingAnswer.answer
+                          ? 'bg-red-100 border-red-500 text-red-800'
+                          : 'bg-gray-100 border-gray-300'
+                        : 'bg-white border-gray-300 hover:border-blue-500 hover:bg-blue-50'
+                    }`}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        }
+        return null;
+
+      case 'grammar':
+        // Handle grammar-specific assignments (same as fill-blank for now)
+        return renderAssignment();
+
       default:
-        return <div>Unknown assignment type</div>;
+        // Show skip option for truly unknown types
+        return (
+          <div className="text-center p-8 bg-yellow-50 rounded-lg">
+            <div className="text-4xl mb-4">🚧</div>
+            <h3 className="text-lg font-semibold text-yellow-800 mb-2">Assignment Type Not Supported Yet</h3>
+            <p className="text-yellow-700 mb-4">
+              The assignment type "{currentAssignmentData.type}" is not implemented yet.
+            </p>
+            <button 
+              onClick={handleNext}
+              className="bg-yellow-600 text-white px-6 py-2 rounded-lg hover:bg-yellow-700"
+            >
+              Skip and Continue
+            </button>
+          </div>
+        );
     }
   };
 
@@ -529,24 +546,26 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
               </div>
 
               {/* Display lesson content based on skill type */}
-              {skill === 'listening' && lesson.content?.audioText && (
+              {skill === 'listening' && lesson.content?.audioText && isAudioReady && (
                 <div className="bg-gray-50 p-6 rounded-lg">
                   <div className="flex items-center justify-between mb-4">
                     <h4 className="font-semibold text-gray-800">Audio Content</h4>
-                    <button
-                      onClick={() => isPlaying ? stopAudio() : playAudio()}
-                      className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
-                    >
-                      {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                      <span>{isPlaying ? 'Stop' : 'Play'}</span>
-                      <Volume2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={restartAudio}
-                      className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700"
-                    >
-                      Restart
-                    </button>
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => isPlaying ? stopAudio() : playAudio()}
+                        className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+                      >
+                        {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                        <span>{isPlaying ? 'Stop' : 'Play'}</span>
+                        <Volume2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={restartAudio}
+                        className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700"
+                      >
+                        Restart
+                      </button>
+                    </div>
                   </div>
                   <p className="text-gray-700 leading-relaxed">{lesson.content.audioText}</p>
                   {isPlaying && (
@@ -645,7 +664,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                   <p className={`mb-3 ${
                     currentFeedback.correct ? 'text-green-700' : 'text-red-700'
                   }`}>
-                    {currentFeedback.feedback}
+                    {currentFeedback.feedback.length > 200 ? currentFeedback.feedback.substring(0, 200) + '...' : currentFeedback.feedback}
                   </p>
                   <p className="text-sm text-gray-600 mb-4">
                     Score: {currentFeedback.score}/100

@@ -277,7 +277,7 @@ export async function generateGrammarLesson(level: string, lessonNumber: number,
   };
 
   const topicList = topics[level as keyof typeof topics];
-  const topic = topicList[lessonNumber % topicList.length];
+  const topic = topicList[(lessonNumber - 1) % topicList.length];
 
   const prompt = `
 Create a grammar lesson about "${topic}" for ${level} level English learners.
@@ -285,7 +285,7 @@ Create a grammar lesson about "${topic}" for ${level} level English learners.
 Requirements:
 - Provide clear explanation of the grammar rule
 - Include examples and usage patterns
-- Create 4-5 practice exercises (fill-in-blank, MCQ, error correction)
+- Create 4-5 practice exercises (fill-blank, mcq, true-false)
 - Make it practical and easy to understand
 
 Return in this JSON format:
@@ -304,6 +304,12 @@ Return in this JSON format:
       "question": "Choose the correct sentence:",
       "options": ["option1", "option2", "option3", "option4"],
       "correctAnswer": 1,
+      "points": 10
+    },
+    {
+      "type": "true-false",
+      "question": "True or False: The present simple is used for habits.",
+      "correctAnswer": true,
       "points": 10
     }
   ]
@@ -337,15 +343,15 @@ export async function generateVocabularyLesson(level: string, lessonNumber: numb
   };
 
   const themeList = themes[level as keyof typeof themes];
-  const theme = themeList[lessonNumber % themeList.length];
+  const theme = themeList[(lessonNumber - 1) % themeList.length];
 
   const prompt = `
 Create a vocabulary lesson about "${theme}" for ${level} level English learners.
 
 Requirements:
-- Introduce 8-10 new words related to ${theme}
+- Introduce 5-6 new words related to ${theme}
 - Include definitions, pronunciations, and example sentences
-- Create practice exercises (matching, fill-in-blank, usage questions)
+- Create practice exercises (mcq, fill-blank, true-false)
 - Make it engaging and memorable
 
 Return in this JSON format:
@@ -367,6 +373,12 @@ Return in this JSON format:
       "question": "What does 'word' mean?",
       "options": ["option1", "option2", "option3", "option4"],
       "correctAnswer": 0,
+      "points": 10
+    },
+    {
+      "type": "fill-blank",
+      "question": "Complete the sentence with the correct word: I feel _____ when I see my family.",
+      "correctAnswer": "happy",
       "points": 10
     }
   ]

@@ -91,11 +91,18 @@ Consider grammar, vocabulary, content relevance, and completeness in your evalua
 }
 
 export async function checkSpeakingAnswer(prompt: string, transcript: string): Promise<AIFeedback> {
-  return checkOpenAnswer(
+  const result = await checkOpenAnswer(
     `Speaking prompt: ${prompt}`,
     transcript,
-    'This is a speaking exercise. Evaluate pronunciation, fluency, grammar, and content.'
+    'This is a speaking exercise. Give brief, encouraging feedback on pronunciation, fluency, and content. Keep feedback under 100 words.'
   );
+  
+  // Ensure feedback is concise for speaking
+  if (result.feedback.length > 150) {
+    result.feedback = result.feedback.substring(0, 147) + '...';
+  }
+  
+  return result;
 }
 
 export async function checkWritingAnswer(prompt: string, essay: string, minWords?: number): Promise<AIFeedback> {

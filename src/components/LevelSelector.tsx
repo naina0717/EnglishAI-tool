@@ -26,10 +26,8 @@ export function LevelSelector({ title, icon, progress, onLevelSelect, onBack }: 
   };
 
   const canAccessLevel = (level: typeof levels[number]) => {
-    if (level === 'beginner') return true;
-    if (level === 'intermediate') return isCompleted('beginner');
-    if (level === 'advanced') return isCompleted('intermediate');
-    return false;
+    // All levels are accessible from the start for better UX
+    return true;
   };
 
   return (
