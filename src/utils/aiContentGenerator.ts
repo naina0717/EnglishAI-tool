@@ -61,7 +61,6 @@ Return in this JSON format:
 {
   "title": "lesson title",
   "tutorial": "explanation of listening strategies and what students will learn",
-  "audioText": "the text to be read aloud",
   "assignments": [
     {
       "type": "mcq",
@@ -94,7 +93,6 @@ Return in this JSON format:
       id: `listening-${level}-${lessonNumber}`,
       title: lessonData.title,
       tutorial: lessonData.tutorial,
-      content: { audioText: lessonData.audioText },
       assignments: lessonData.assignments.map((a: any, i: number) => ({
         ...a,
         id: `q${i + 1}`
@@ -126,7 +124,9 @@ Return in this JSON format:
 {
   "title": "lesson title",
   "tutorial": "reading strategies and learning objectives",
-  "passage": "the reading text",
+  "content": {
+    "passage": "the reading text"
+  },
   "assignments": [
     {
       "type": "mcq",
@@ -154,7 +154,7 @@ Return in this JSON format:
       id: `reading-${level}-${lessonNumber}`,
       title: lessonData.title,
       tutorial: lessonData.tutorial,
-      content: { passage: lessonData.passage },
+      content: lessonData.content || { passage: lessonData.passage },
       assignments: lessonData.assignments.map((a: any, i: number) => ({
         ...a,
         id: `q${i + 1}`
@@ -185,7 +185,6 @@ Return in this JSON format:
 {
   "title": "lesson title",
   "tutorial": "speaking strategies, pronunciation tips, and objectives",
-  "instructions": "general instructions for the speaking exercises",
   "assignments": [
     {
       "type": "speaking",
@@ -206,7 +205,6 @@ Return in this JSON format:
       id: `speaking-${level}-${lessonNumber}`,
       title: lessonData.title,
       tutorial: lessonData.tutorial,
-      content: { instructions: lessonData.instructions },
       assignments: lessonData.assignments.map((a: any, i: number) => ({
         ...a,
         id: `q${i + 1}`
@@ -358,15 +356,17 @@ Return in this JSON format:
 {
   "title": "lesson title about ${theme}",
   "tutorial": "introduction to the vocabulary theme and learning strategies",
-  "words": [
-    {
-      "word": "example",
-      "definition": "definition here",
-      "pronunciation": "/ɪɡˈzæmpəl/",
-      "example": "example sentence",
-      "synonyms": ["synonym1", "synonym2"]
-    }
-  ],
+  "content": {
+    "words": [
+      {
+        "word": "example",
+        "definition": "definition here",
+        "pronunciation": "/ɪɡˈzæmpəl/",
+        "example": "example sentence",
+        "synonyms": ["synonym1", "synonym2"]
+      }
+    ]
+  },
   "assignments": [
     {
       "type": "mcq",
@@ -394,7 +394,7 @@ Return in this JSON format:
       id: `vocabulary-${level}-${lessonNumber}`,
       title: lessonData.title,
       tutorial: lessonData.tutorial,
-      content: { words: lessonData.words },
+      content: lessonData.content || { words: lessonData.words },
       assignments: lessonData.assignments.map((a: any, i: number) => ({
         ...a,
         id: `q${i + 1}`

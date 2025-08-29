@@ -91,18 +91,64 @@ Consider grammar, vocabulary, content relevance, and completeness in your evalua
 }
 
 export async function checkSpeakingAnswer(prompt: string, transcript: string): Promise<AIFeedback> {
-  const result = await checkOpenAnswer(
-    `Speaking prompt: ${prompt}`,
-    transcript,
-    'This is a speaking exercise. Give brief, encouraging feedback on pronunciation, fluency, and content. Keep feedback under 100 words.'
-  );
-  
-  // Ensure feedback is concise for speaking
-  if (result.feedback.length > 150) {
-    result.feedback = result.feedback.substring(0, 147) + '...';
+  try {
+    const speakingPrompt = `
+You are an English teacher evaluating a student's speaking response. Please provide structured feedback.
+
+Speaking Prompt: ${prompt}
+Student's Response: ${transcript}
+
+Please evaluate the response and respond in this exact JSON format:
+{
+  "correct": true/false,
+  "score": number (0-100),
+  "feedback": "brief feedback under 100 words about pronunciation, fluency, and content"
+}
+
+Keep feedback encouraging and concise.
+`;
+
+    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: speakingPrompt }] }]
+      })
+    });
+    
+    const data = await response.json();
+    const responseText = data.candidates[0].content.parts[0].text;
+    
+    // Try to parse JSON response
+    try {
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const result = JSON.parse(jsonMatch[0]);
+        // Ensure feedback is concise
+        if (result.feedback.length > 100) {
+          result.feedback = result.feedback.substring(0, 97) + '...';
+        }
+        return result;
+      }
+    } catch (parseError) {
+      console.error('Error parsing speaking response:', parseError);
+    }
+    
+    // Fallback
+    return {
+      correct: transcript.length > 5,
+      score: transcript.length > 5 ? 75 : 25,
+      feedback: 'Good effort! Keep practicing your speaking skills.'
+    };
+    
+  } catch (error) {
+    console.error('Error checking speaking answer:', error);
+    return {
+      correct: false,
+      score: 0,
+      feedback: 'Unable to evaluate. Please try again.'
+    };
   }
-  
-  return result;
 }
 
 export async function checkWritingAnswer(prompt: string, essay: string, minWords?: number): Promise<AIFeedback> {

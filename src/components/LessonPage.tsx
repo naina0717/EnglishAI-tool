@@ -34,26 +34,34 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
   const [audioChunks, setAudioChunks] = useState<string[]>([]);
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
   const [isAudioReady, setIsAudioReady] = useState(false);
+  const [utteranceRef, setUtteranceRef] = useState<SpeechSynthesisUtterance | null>(null);
 
   const { isListening, transcript, startListening, stopListening, resetTranscript } = useSpeechRecognition();
 
   const currentAssignmentData = lesson.assignments[currentAssignment];
 
-  // Assignment type registry
-  const supportedTypes = ['mcq', 'true-false', 'fill-blank', 'open', 'speaking', 'writing', 'matching', 'vocabulary', 'grammar'];
+  // Clean up audio on unmount
+  useEffect(() => {
+    return () => {
+      if ('speechSynthesis' in window) {
+        speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     // Split audio text into chunks for better TTS handling
-    if (skill === 'listening' && lesson.content?.audioText) {
-      const sentences = lesson.content.audioText.match(/[^\.!?]+[\.!?]+/g) || [lesson.content.audioText];
+    if (skill === 'listening' && lesson.tutorial) {
+      const sentences = lesson.tutorial.match(/[^\.!?]+[\.!?]+/g) || [lesson.tutorial];
       setAudioChunks(sentences.map(s => s.trim()));
       setIsAudioReady(true);
     }
-  }, [lesson.content?.audioText, skill]);
+  }, [lesson.tutorial, skill]);
 
   // Text-to-Speech for listening exercises
   const playAudio = () => {
     if ('speechSynthesis' in window) {
+      speechSynthesis.cancel(); // Cancel any existing speech
       setIsPlaying(true);
       setCurrentChunkIndex(0);
       playChunk(0);
@@ -63,6 +71,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
   const playChunk = (chunkIndex: number) => {
     if (chunkIndex >= audioChunks.length) {
       setIsPlaying(false);
+      setUtteranceRef(null);
       return;
     }
 
@@ -70,6 +79,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
     utterance.rate = 0.8;
     utterance.pitch = 1;
     utterance.volume = 1;
+    setUtteranceRef(utterance);
     
     utterance.onend = () => {
       const nextIndex = chunkIndex + 1;
@@ -78,7 +88,13 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
         setTimeout(() => playChunk(nextIndex), 200); // Small pause between chunks
       } else {
         setIsPlaying(false);
+        setUtteranceRef(null);
       }
+    };
+    
+    utterance.onerror = () => {
+      setIsPlaying(false);
+      setUtteranceRef(null);
     };
     
     speechSynthesis.speak(utterance);
@@ -93,17 +109,18 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
     if ('speechSynthesis' in window) {
       speechSynthesis.cancel();
       setIsPlaying(false);
+      setUtteranceRef(null);
     }
   };
 
   const handleAnswer = async (answer: string | number | boolean) => {
-    if (!currentAssignmentData || isSubmitting) return;
-
-    setIsSubmitting(true);
-    setShowFeedback(false);
-    setCurrentFeedback(null);
-
     try {
+      if (!currentAssignmentData || isSubmitting) return;
+
+      setIsSubmitting(true);
+      setShowFeedback(false);
+      setCurrentFeedback(null);
+
       let feedback: AIFeedback | undefined;
 
       // Get AI feedback for open-ended questions
@@ -162,6 +179,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
       if (currentAssignment < lesson.assignments.length - 1) {
         setCurrentAssignment(prev => prev + 1);
         resetTranscript();
+        setWritingText('');
         setShowFeedback(false);
         setCurrentFeedback(null);
       } else {
@@ -170,6 +188,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
       }
     } catch (error) {
       console.error('Error advancing to next question:', error);
+      // Don't crash - just log and continue
     }
   };
 
@@ -180,6 +199,8 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
     setWritingText('');
     resetTranscript();
     setIsSubmitting(false);
+    // Force re-render by updating a state
+    setCurrentAssignment(prev => prev);
   };
 
   const renderAssignment = () => {
@@ -189,6 +210,26 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
           <p className="text-gray-600 mb-4">No assignment data available</p>
           <button onClick={handleNext} className="bg-blue-600 text-white px-4 py-2 rounded-lg">
             Continue
+          </button>
+        </div>
+      );
+    }
+
+    // Check if assignment type is supported
+    const supportedTypes = ['mcq', 'true-false', 'fill-blank', 'open', 'speaking', 'writing'];
+    if (!supportedTypes.includes(currentAssignmentData.type)) {
+      return (
+        <div className="text-center p-8 bg-yellow-50 rounded-lg">
+          <div className="text-4xl mb-4">🚧</div>
+          <h3 className="text-lg font-semibold text-yellow-800 mb-2">Assignment Type Not Supported Yet</h3>
+          <p className="text-yellow-700 mb-4">
+            The assignment type "{currentAssignmentData.type}" is not implemented yet.
+          </p>
+          <button 
+            onClick={handleNext}
+            className="bg-yellow-600 text-white px-6 py-2 rounded-lg hover:bg-yellow-700"
+          >
+            Skip and Continue
           </button>
         </div>
       );
@@ -416,44 +457,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
           </div>
         );
 
-      case 'matching':
-      case 'vocabulary':
-        // Handle vocabulary-specific assignments
-        if (currentAssignmentData.type === 'vocabulary' || currentAssignmentData.type === 'matching') {
-          return (
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold mb-4">{currentAssignmentData.question}</h3>
-              <div className="space-y-2">
-                {currentAssignmentData.options?.map((option, index) => (
-                  <button
-                    key={index}
-                    onClick={() => handleAnswer(index)}
-                    disabled={existingAnswer || isSubmitting || showFeedback}
-                    className={`w-full p-3 text-left rounded-lg border transition-colors ${
-                      existingAnswer
-                        ? index === currentAssignmentData.correctAnswer
-                          ? 'bg-green-100 border-green-500 text-green-800'
-                          : index === existingAnswer.answer
-                          ? 'bg-red-100 border-red-500 text-red-800'
-                          : 'bg-gray-100 border-gray-300'
-                        : 'bg-white border-gray-300 hover:border-blue-500 hover:bg-blue-50'
-                    }`}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            </div>
-          );
-        }
-        return null;
-
-      case 'grammar':
-        // Handle grammar-specific assignments (same as fill-blank for now)
-        return renderAssignment();
-
       default:
-        // Show skip option for truly unknown types
         return (
           <div className="text-center p-8 bg-yellow-50 rounded-lg">
             <div className="text-4xl mb-4">🚧</div>
@@ -546,7 +550,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
               </div>
 
               {/* Display lesson content based on skill type */}
-              {skill === 'listening' && lesson.content?.audioText && isAudioReady && (
+              {skill === 'listening' && isAudioReady && audioChunks.length > 0 && (
                 <div className="bg-gray-50 p-6 rounded-lg">
                   <div className="flex items-center justify-between mb-4">
                     <h4 className="font-semibold text-gray-800">Audio Content</h4>
@@ -567,7 +571,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                       </button>
                     </div>
                   </div>
-                  <p className="text-gray-700 leading-relaxed">{lesson.content.audioText}</p>
+                  <p className="text-gray-700 leading-relaxed">{audioChunks.join(' ')}</p>
                   {isPlaying && (
                     <div className="mt-2 text-sm text-blue-600">
                       Playing chunk {currentChunkIndex + 1} of {audioChunks.length}
@@ -643,9 +647,9 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                 />
               </div>
 
-              <ErrorBoundary>
+              <div>
                 {renderAssignment()}
-              </ErrorBoundary>
+              </div>
 
               {/* Feedback Panel */}
               {showFeedback && currentFeedback && (
@@ -664,7 +668,7 @@ export function LessonPage({ lesson, skill, onComplete, onBack }: LessonPageProp
                   <p className={`mb-3 ${
                     currentFeedback.correct ? 'text-green-700' : 'text-red-700'
                   }`}>
-                    {currentFeedback.feedback.length > 200 ? currentFeedback.feedback.substring(0, 200) + '...' : currentFeedback.feedback}
+                    {currentFeedback.feedback}
                   </p>
                   <p className="text-sm text-gray-600 mb-4">
                     Score: {currentFeedback.score}/100

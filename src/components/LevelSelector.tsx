@@ -25,9 +25,12 @@ export function LevelSelector({ title, icon, progress, onLevelSelect, onBack }: 
     return completedInLevel >= levelLessons;
   };
 
-  const canAccessLevel = (level: typeof levels[number]) => {
-    // All levels are accessible from the start for better UX
-    return true;
+  const canAccessLevel = (level: typeof levels[number], index: number) => {
+    // Beginner is always accessible
+    if (index === 0) return true;
+    // Check if previous level is completed
+    const previousLevel = levels[index - 1];
+    return isCompleted(previousLevel);
   };
 
   return (
@@ -49,7 +52,7 @@ export function LevelSelector({ title, icon, progress, onLevelSelect, onBack }: 
         
         <div className="grid md:grid-cols-3 gap-6">
           {levels.map((level, index) => {
-            const unlocked = canAccessLevel(level);
+            const unlocked = canAccessLevel(level, index);
             const completed = isCompleted(level);
             const isCurrent = progress.level === level;
             
